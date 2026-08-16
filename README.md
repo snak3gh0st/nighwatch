@@ -108,6 +108,15 @@ Se o entrypoint ainda não estiver disponível no shell, execute a CLI diretamen
 PYTHONPATH=src python -m agentsec.cli --help
 ```
 
+Ao abrir um terminal interativo, o CLI exibe a identidade `NIGHTWATCH // AGENTSEC`, atribuída a `snak3gh0st`. O comando original `agentsec` continua disponível e `nightwatch` é um alias de entrada:
+
+```bash
+nightwatch --help
+agentsec --no-banner scope validate --config engagements/example.json
+```
+
+O banner vai para `stderr`, portanto não quebra JSON em `stdout` nem pipelines. Use `--no-banner` em automações.
+
 ## Configurar o Ollama
 
 No Mac Apple Silicon, o Ollama pode usar a aceleração Metal. No Linux, ele pode usar CPU ou a GPU disponível. Para o MVP, mantenha o Ollama no mesmo host da CLI e não exponha a API para a rede.
