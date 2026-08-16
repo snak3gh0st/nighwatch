@@ -61,14 +61,32 @@ class OllamaConfig:
 
     @classmethod
     def from_env(cls, model_override: str | None = None) -> "OllamaConfig":
-        base_url = os.getenv("AGENTSEC_OLLAMA_BASE_URL", os.getenv("OLLAMA_BASE_URL", cls.base_url))
-        model = model_override or os.getenv("AGENTSEC_OLLAMA_MODEL", os.getenv("OLLAMA_MODEL", cls.model))
-        allow_remote = os.getenv("AGENTSEC_OLLAMA_ALLOW_REMOTE", "").lower() in {"1", "true", "yes"}
+        base_url = os.getenv(
+            "NIGHWATCH_OLLAMA_BASE_URL",
+            os.getenv("AGENTSEC_OLLAMA_BASE_URL", os.getenv("OLLAMA_BASE_URL", cls.base_url)),
+        )
+        model = model_override or os.getenv(
+            "NIGHWATCH_OLLAMA_MODEL",
+            os.getenv("AGENTSEC_OLLAMA_MODEL", os.getenv("OLLAMA_MODEL", cls.model)),
+        )
+        allow_remote = os.getenv(
+            "NIGHWATCH_OLLAMA_ALLOW_REMOTE",
+            os.getenv("AGENTSEC_OLLAMA_ALLOW_REMOTE", ""),
+        ).lower() in {"1", "true", "yes"}
 
         try:
-            timeout = float(os.getenv("AGENTSEC_OLLAMA_TIMEOUT_SECONDS", str(cls.timeout_seconds)))
-            temperature = float(os.getenv("AGENTSEC_OLLAMA_TEMPERATURE", str(cls.temperature)))
-            max_tokens = int(os.getenv("AGENTSEC_OLLAMA_MAX_TOKENS", str(cls.max_tokens)))
+            timeout = float(os.getenv(
+                "NIGHWATCH_OLLAMA_TIMEOUT_SECONDS",
+                os.getenv("AGENTSEC_OLLAMA_TIMEOUT_SECONDS", str(cls.timeout_seconds)),
+            ))
+            temperature = float(os.getenv(
+                "NIGHWATCH_OLLAMA_TEMPERATURE",
+                os.getenv("AGENTSEC_OLLAMA_TEMPERATURE", str(cls.temperature)),
+            ))
+            max_tokens = int(os.getenv(
+                "NIGHWATCH_OLLAMA_MAX_TOKENS",
+                os.getenv("AGENTSEC_OLLAMA_MAX_TOKENS", str(cls.max_tokens)),
+            ))
         except ValueError as exc:
             raise OllamaConfigError("invalid Ollama numeric environment variable") from exc
 

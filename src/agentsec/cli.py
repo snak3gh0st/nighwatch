@@ -1,4 +1,4 @@
-"""AgentSec command-line interface."""
+"""Nighwatch command-line interface."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from .models import ConfigError, EngagementConfig, RiskLevel
 from .planner import OllamaPlanner
 from .security import ActionRequest
 
-DISPLAY_NAME = "NIGHTWATCH // AGENTSEC"
+DISPLAY_NAME = "NIGHWATCH"
 
 
 def _print_banner() -> None:
@@ -44,7 +44,9 @@ def _load(path: str) -> EngagementConfig:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agentsec", description="Secure-by-default AI security testing control plane")
+    invoked_as = Path(sys.argv[0]).name.lower()
+    program = invoked_as if invoked_as in {"nighwatch", "nightwatch", "agentsec"} else "nighwatch"
+    parser = argparse.ArgumentParser(prog=program, description="Nighwatch secure-by-default AI security testing control plane")
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--no-banner", action="store_true", help="suppress the interactive startup banner")
     commands = parser.add_subparsers(dest="command", required=True)

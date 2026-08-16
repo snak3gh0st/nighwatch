@@ -1,1 +1,1 @@
-"""Test package for AgentSec."""
+"""Test package for Nighwatch."""

@@ -1,168 +1,175 @@
-# AgentSec
+# Nighwatch
 
-CLI Linux-first para usar AI como copiloto de bug bounty e security testing em ativos onde existe autorização explícita.
+Linux-first CLI for using AI as a reasoning copilot for authorized bug bounty and security testing.
 
-O AgentSec não é um scanner que dispara centenas de templates. A proposta é combinar:
+Nighwatch is not a spray scanner that blindly runs hundreds of templates. It is designed to combine:
 
-1. observações da aplicação;
-2. raciocínio do modelo local via Ollama;
-3. ferramentas determinísticas;
-4. validação independente;
-5. evidências reproduzíveis;
-6. relatório final revisável por uma pessoa.
+1. application observations;
+2. local reasoning through Ollama;
+3. deterministic security tools;
+4. independent verification;
+5. reproducible evidence; and
+6. a human-reviewable final report.
 
-A regra principal é: o modelo pode propor uma próxima tarefa, mas nunca recebe acesso direto à rede, browser, shell ou ferramentas. Qualquer execução futura terá de passar pelo Tool Gateway, Scope Guard, Rate Limiter, Request Logger e Action Approval.
+The central rule is simple: the model may propose the next bounded task, but it never gets direct access to the network, browser, shell, or security tools. Any future execution must pass through the policy and execution controls described below.
 
-## O que ele faz hoje
+## Current status
 
-Este primeiro slice já implementa o núcleo seguro:
+The current slice implements the secure control-plane foundation:
 
-- configuração de um engagement autorizado;
-- escopo default-deny por esquema, host, porta, path e método HTTP;
-- hosts excluídos explicitamente;
-- hash determinístico da política;
-- limites de requests, concorrência e custo;
-- classificação de ações como `read_only`, `state_change` ou `destructive`;
-- redaction de headers e parâmetros sensíveis;
-- cliente Ollama local com JSON estruturado;
-- Planner Agent que propõe uma única próxima tarefa;
-- Tool Gateway em modo `dry-run`;
-- testes unitários da camada de segurança.
+- authorized engagement configuration;
+- default-deny scope by scheme, host, port, path, and HTTP method;
+- explicit excluded hosts;
+- deterministic policy hashing;
+- request, concurrency, and cost budgets;
+- read-only, state-changing, and destructive action classification;
+- redaction of sensitive headers and parameters;
+- a local Ollama client with structured JSON output;
+- a Planner that proposes one bounded next task; and
+- a dry-run Tool Gateway.
 
-Ainda não há execução real de HTTP, browser, shell, Nuclei, ffuf ou outros scanners. Isso é intencional. A primeira etapa valida o contrato de autorização e o fluxo de raciocínio antes de adicionar ferramentas que gerem tráfego.
+Real HTTP, browser, shell, scanner, and proxy execution is intentionally disabled in this first slice. The first milestone validates authorization and reasoning contracts before adding components that generate traffic or change state.
 
-## Strix upstream
+## What Nighwatch is meant to do
 
-O motor de pentesting e reporting do Strix foi importado em [`vendor/strix/`](vendor/strix/). A integração ainda está atrás do AgentSec e não é executada automaticamente nesta fase.
-
-Vamos reutilizar do Strix:
-
-- agentes e coordenação multi-agent;
-- runtime Docker e sandbox;
-- proxy/Caido e histórico de requests;
-- skills de vulnerabilidades;
-- geração de PoCs e reports;
-- JSON, CSV, SARIF e Markdown.
-
-O AgentSec adicionará a fronteira que o Strix não deve receber diretamente: escopo tipado, aprovação, rate limit, receipts, Evidence Store e verificação independente. A decisão de integração está documentada em [`docs/STRIX_INTEGRATION.md`](docs/STRIX_INTEGRATION.md), e a licença do código importado em [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
-
-## Como ele ajudará no bug bounty
-
-Quando o pipeline estiver completo, o fluxo será:
+The target workflow is:
 
 ```text
-escopo autorizado
-  -> recon controlado
-  -> mapa da aplicação
-  -> análise de autenticação
-  -> comparação entre perfis de usuário
-  -> hipóteses de autorização, API e business logic
-  -> execução limitada de testes
-  -> observação dos resultados
-  -> validação independente
-  -> evidência reproduzível
-  -> análise de impacto
-  -> relatório
+authorized scope
+  -> controlled reconnaissance
+  -> application map
+  -> authentication analysis
+  -> authenticated API and endpoint map
+  -> vulnerability hypotheses
+  -> bounded tests
+  -> observations
+  -> adaptive strategy
+  -> independent validation
+  -> reproducible evidence
+  -> impact analysis
+  -> final report
 ```
 
-O modelo será útil principalmente para:
+The model is useful for connecting endpoints, objects, roles, and business flows; comparing authorized user profiles; proposing IDOR/BOLA, broken access control, API authorization, SSRF, XSS, session, and business-logic hypotheses; and identifying which observation is still missing.
 
-- relacionar endpoints, objetos, papéis e fluxos de negócio;
-- comparar respostas entre `owner_user`, `non_owner_user` e outros perfis autorizados;
-- sugerir hipóteses de IDOR/BOLA, broken access control, API authorization, SSRF, XSS e falhas de sessão;
-- decidir qual observação falta para confirmar ou rejeitar uma hipótese;
-- transformar evidências já coletadas em uma reprodução e relatório claros.
+The model must never turn a probability estimate into a reportable vulnerability. A finding requires observable evidence, consistent reproduction, and demonstrated impact.
 
-Ele não deve declarar uma vulnerabilidade apenas por probabilidade textual. O finding precisa ter evidência observável, reprodução consistente e impacto demonstrável.
+## Safety boundary
 
-## Requisitos
+The execution boundary is designed as:
 
-- Python 3.12 ou superior;
-- Ollama instalado localmente;
-- um modelo local compatível com chat e structured outputs;
-- autorização escrita para cada target testado.
+```text
+Human authorization
+        |
+        v
+EngagementConfig -> Scope Guard -> Rate Limiter -> Action Approval
+        |                                      |
+        v                                      v
+  Ollama Planner                         Tool Gateway
+        |                              (future adapters)
+        v                                      |
+  Task Proposal -------------------------------+
+                                               v
+                              Request Logger + Evidence Store
+```
 
-O código usa apenas a biblioteca padrão em runtime neste estágio. Isso facilita a auditoria do núcleo antes da entrada de browser, HTTP clients e scanners.
+The policy is an executable restriction, not prompt text. The system must refuse targets outside the declared scheme, host, port, path, method, or engagement window. Model output, discovered links, redirects, DNS results, and scanner output cannot expand scope.
 
-## Instalação
+## Requirements
+
+- Python 3.12 or newer;
+- Ollama installed locally;
+- a local model that supports chat and structured output;
+- explicit written authorization for every target; and
+- a Linux or macOS terminal for the CLI.
+
+The runtime currently uses only the Python standard library. This keeps the control plane easy to audit before adding browser, HTTP, and scanner dependencies.
+
+## Installation
 
 ```bash
-git clone <url-do-repositorio>
-cd agentsec
+git clone https://github.com/snak3gh0st/nighwatch.git
+cd nighwatch
 
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install '.[dev]'
 ```
 
-Valide a instalação:
+Validate the installation:
 
 ```bash
-agentsec --version
+nighwatch --version
+nighwatch --help
 pytest
 ```
 
-Se o entrypoint ainda não estiver disponível no shell, execute a CLI diretamente a partir do código-fonte:
+The internal Python package remains `agentsec` for compatibility with the first development snapshots. The public command and distribution name are `nighwatch`.
+
+You can also run it directly from the source tree:
 
 ```bash
-PYTHONPATH=src python -m agentsec.cli --help
+PYTHONPATH=src python -m nighwatch --help
 ```
 
-Ao abrir um terminal interativo, o CLI exibe a identidade `NIGHTWATCH // AGENTSEC`, atribuída a `snak3gh0st`. O comando original `agentsec` continua disponível e `nightwatch` é um alias de entrada:
+Interactive terminals show this startup identity:
+
+```text
+NIGHWATCH
+scope-enforced AI security lab
+by snak3gh0st
+AUTHORIZED TARGETS ONLY • EVERY ACTION LOGGED
+```
+
+The banner is written to `stderr`, so JSON on `stdout` remains machine-readable. Suppress it in automation with:
 
 ```bash
-nightwatch --help
-agentsec --no-banner scope validate --config engagements/example.json
+nighwatch --no-banner scope validate --config engagements/example.json
 ```
 
-O banner vai para `stderr`, portanto não quebra JSON em `stdout` nem pipelines. Use `--no-banner` em automações.
+`nightwatch` and `agentsec` remain available as command aliases during the migration.
 
-## Configurar o Ollama
+## Configure Ollama
 
-No Mac Apple Silicon, o Ollama pode usar a aceleração Metal. No Linux, ele pode usar CPU ou a GPU disponível. Para o MVP, mantenha o Ollama no mesmo host da CLI e não exponha a API para a rede.
+On Apple Silicon, Ollama can use Metal acceleration. On Linux it can use CPU or an available GPU. Keep Ollama on the same host as the CLI and do not expose its API to the network.
 
-Inicie o serviço, caso ainda não esteja ativo:
+Start Ollama if needed:
 
 ```bash
 ollama serve
 ```
 
-Baixe um modelo adequado para uma máquina com 24 GB de memória:
+Download a suitable local model:
 
 ```bash
 ollama pull qwen2.5-coder:14b
 ```
 
-Configure o modelo:
+Configure Nighwatch:
 
 ```bash
-export AGENTSEC_OLLAMA_MODEL=qwen2.5-coder:14b
-export AGENTSEC_OLLAMA_TIMEOUT_SECONDS=180
-export AGENTSEC_OLLAMA_MAX_TOKENS=512
+export NIGHWATCH_OLLAMA_MODEL=qwen2.5-coder:14b
+export NIGHWATCH_OLLAMA_TIMEOUT_SECONDS=180
+export NIGHWATCH_OLLAMA_MAX_TOKENS=512
+nighwatch llm health
 ```
 
-Teste a conexão:
+The client defaults to `http://127.0.0.1:11434` and rejects remote endpoints. This prevents the local model service from becoming an accidentally exposed network service.
 
-```bash
-agentsec llm health
-```
+Older `AGENTSEC_OLLAMA_*` variables are still accepted for compatibility. New installations should use `NIGHWATCH_OLLAMA_*`.
 
-O cliente usa `http://127.0.0.1:11434` por padrão e recusa endpoints remotos. Essa decisão evita transformar o modelo em um serviço acessível por outros dispositivos sem uma configuração explícita.
+## Create an authorized engagement
 
-Modelos maiores podem ser usados para análise offline mais profunda, mas consomem mais memória e podem competir com Chromium, proxy e ferramentas de recon. Em um M4 Pro com 24 GB, comece com um único modelo de aproximadamente 14B.
-
-## Criar um engagement autorizado
-
-Crie um diretório local. Arquivos de engagement, evidências e secrets são ignorados pelo Git porque podem conter autorização, tokens ou PII.
+Create a separate engagement for each program or target:
 
 ```bash
 mkdir -p engagements
-agentsec init --output engagements/example.json
+nighwatch init --output engagements/example.json
 ```
 
-Edite o arquivo e substitua os placeholders apenas pelos dados do programa autorizado. O campo `authorization.artifact_id` é uma referência ao documento ou ticket de autorização; ele não deve conter o documento nem credenciais.
+Edit the template only with the rules of a program for which you have explicit authorization. `authorization.artifact_id` should reference the authorization document or ticket; do not put the document, credentials, cookies, or tokens in the configuration.
 
-Exemplo mínimo seguro:
+Example of a deliberately narrow configuration:
 
 ```json
 {
@@ -200,65 +207,50 @@ Exemplo mínimo seguro:
 }
 ```
 
-Regras importantes:
+Start with explicit hosts, paths, and `GET` only. Do not use wildcard domains or include subdomains that are not explicitly in scope.
 
-- não use wildcard de domínio;
-- declare esquema, host, porta, path e métodos de forma explícita;
-- não coloque cookies, API keys, senhas ou tokens no JSON;
-- comece apenas com `GET` e `read_only`;
-- não inclua subdomínios fora do programa;
-- trate a política do programa como uma restrição executável, não como texto para o prompt.
-
-## Validar o escopo antes de qualquer teste
+## Validate scope before testing
 
 ```bash
-agentsec scope validate --config engagements/example.json
-agentsec policy --config engagements/example.json
-```
+nighwatch scope validate --config engagements/example.json
+nighwatch policy --config engagements/example.json
 
-Teste uma URL individual:
-
-```bash
-agentsec scope check \
+nighwatch scope check \
   --config engagements/example.json \
   --method GET \
   --url https://authorized.example.com/api/health
 ```
 
-O comando retorna código `0` quando a URL está autorizada e código `2` quando é rejeitada. Uma URL com outro host, porta, método ou path deve ser recusada.
+The URL check returns exit code `0` when allowed and `2` when rejected. The policy hash identifies the exact effective policy and should accompany future action receipts and evidence.
 
-O hash exibido em `scope validate` e `policy` identifica a política efetiva usada para a execução. Ele deve acompanhar os receipts e as evidências quando o executor real for implementado.
+## Inspect a safe plan
 
-## Ver o plano seguro
-
-O comando abaixo não faz uma requisição. Ele apenas mostra o que seria avaliado pelo gateway:
+The current run command does not send a request. It only shows what the gateway would evaluate:
 
 ```bash
-agentsec run \
+nighwatch run \
   --config engagements/example.json \
   --dry-run
 ```
 
-Sem `--dry-run`, a execução termina bloqueada nesta fase:
+Without `--dry-run`, execution remains blocked:
 
 ```text
 execution blocked: the HTTP/browser/shell Tool Gateway is not enabled yet
 ```
 
-## Usar o Planner com Ollama
+## Use the Planner with Ollama
 
-Uma observação é um arquivo de texto contendo fatos já observados por uma pessoa ou ferramenta autorizada. Ela pode incluir endpoints, status, headers não sensíveis, diferenças de resposta e contexto do fluxo. Remova tokens, cookies, PII desnecessária e segredos antes de salvar.
-
-Teste com a observação sintética incluída no repositório:
+An observation is a text file containing facts already collected by an authorized person or tool. It may include endpoints, status codes, non-sensitive headers, response differences, and workflow context. Remove cookies, tokens, credentials, unnecessary personal data, and secrets before saving it.
 
 ```bash
-agentsec plan \
+nighwatch plan \
   --config engagements/example.json \
   --observation examples/observations/order-api.txt \
   --model qwen2.5-coder:14b
 ```
 
-O resultado contém campos semelhantes a:
+The proposal is structured and bounded:
 
 ```json
 {
@@ -273,24 +265,9 @@ O resultado contém campos semelhantes a:
 }
 ```
 
-`target_ref` é um identificador opaco, não uma URL executável. A proposta não autoriza rede, não confirma uma vulnerabilidade e não substitui a revisão humana.
+`target_ref` is an opaque state reference, not an executable URL or filesystem path. A proposal does not authorize network access, confirm a vulnerability, or replace human review.
 
-## Fluxo recomendado durante um teste
-
-1. Obtenha e arquive a autorização escrita e as regras do programa.
-2. Crie um engagement separado por programa ou target.
-3. Declare somente hosts, paths e métodos permitidos.
-4. Valide a configuração e registre o `policy_hash`.
-5. Colete uma observação inicial de forma manual ou com uma ferramenta autorizada.
-6. Peça ao Planner uma única próxima tarefa.
-7. Revise a proposta antes de executá-la.
-8. Execute somente através do Tool Gateway quando essa camada estiver habilitada.
-9. Guarde request, response, perfil de autenticação, timestamp e hash da evidência.
-10. Reproduza o comportamento de forma independente antes de criar o finding.
-11. Demonstre impacto sem alterar dados reais ou causar indisponibilidade.
-12. Gere o relatório final somente com evidência verificável.
-
-O pipeline de findings será:
+## Finding verification pipeline
 
 ```text
 Candidate Finding
@@ -301,85 +278,74 @@ Candidate Finding
   -> Final Finding
 ```
 
-## Arquitetura de segurança
+Only the final state is reportable. Evidence should include the relevant request and response, authentication profile, timestamp, policy hash, action receipt, reproduction steps, and a safe impact explanation. State-changing or destructive actions require explicit approval and must remain disabled by default.
 
-```text
-Humano + autorização
-          |
-          v
-EngagementConfig -> Scope Guard -> Rate Limiter -> Action Approval
-          |                              |
-          v                              v
-     Ollama Planner                 Tool Gateway
-          |                       (futuro HTTP/browser/shell)
-          v                              |
-     Task Proposal ----------------------+
-                                         v
-                              Request Logger + Evidence Store
-```
+## Recommended implementation order
 
-O modelo fica no plano de decisão. As ferramentas ficam no plano de execução. Essa separação é necessária para reduzir prompt injection, escopo acidental, falsos positivos e ações destrutivas.
+1. append-only Evidence Store with content hashes and receipts;
+2. read-only HTTP adapter with egress pinning and deterministic rate limits;
+3. controlled browser adapter for approved workflows;
+4. application mapping and authenticated profile comparison;
+5. adapters for deterministic reconnaissance and fuzzing tools behind the gateway;
+6. independent finding validators and rejection states;
+7. report generation in Markdown, JSON, SARIF, and PDF; and
+8. explicit approval flows for state-changing tests.
 
-## O que ainda será implementado
+Traditional tools should provide observations, not final authority. Scanner output must never become a finding without verification and reproducible evidence.
 
-As próximas camadas serão adicionadas nesta ordem:
+## Security rules
 
-1. Evidence Store com hashes e receipts imutáveis;
-2. HTTP Tool read-only com egress pinning e rate limit;
-3. adapter AgentSec -> Strix com instruction file limitado;
-4. coleta de mapa da aplicação;
-5. perfis autenticados e comparação de respostas;
-6. Playwright controlado para fluxos web;
-7. adapters para `httpx`, `katana`, `subfinder`, `nuclei` e `ffuf`, sempre atrás do gateway;
-8. validação de findings e reprodução independente;
-9. geração de relatório final.
+Use Nighwatch only against assets for which you have explicit authorization. Read [`SECURITY.md`](SECURITY.md) before adding an execution adapter.
 
-Ferramentas tradicionais serão fontes de observação, não a autoridade final. O LLM não poderá executar um comando arbitrário nem converter uma saída de scanner diretamente em finding.
-
-## Segurança e autorização
-
-Use este projeto somente em ativos para os quais você possui autorização explícita. Leia [`SECURITY.md`](SECURITY.md) antes de adicionar qualquer adapter.
-
-O MVP bloqueia execução real por design. Não tente contornar o bloqueio removendo o `dry-run`, relaxando o escopo ou expondo o Ollama na rede. Primeiro devem existir um gateway de egress, kill switch, approval flow, logging completo e Evidence Store.
+Do not bypass the dry-run block, weaken the scope, expose Ollama remotely, or connect a browser, proxy, scanner, or shell directly to the model. The system needs an egress guard, kill switch, approval flow, complete request logging, and an evidence store before real execution is enabled.
 
 ## Troubleshooting
 
-### `agentsec: command not found`
+### `nighwatch: command not found`
 
-Ative o virtualenv ou use o fallback:
+Activate the virtual environment or use the source-tree fallback:
 
 ```bash
 source .venv/bin/activate
-PYTHONPATH=src python -m agentsec.cli --help
+PYTHONPATH=src python -m nighwatch --help
 ```
 
-### Modelo não encontrado
+### Model not found
 
 ```bash
 ollama list
 ollama pull qwen2.5-coder:14b
-agentsec llm health --model qwen2.5-coder:14b
+nighwatch llm health --model qwen2.5-coder:14b
 ```
 
-### Ollama não responde
+### Ollama is not responding
 
 ```bash
 ollama serve
-agentsec llm health
+nighwatch llm health
 ```
 
-Se a CLI estiver em uma VM Linux e o Ollama estiver no macOS host, prefira executar o Ollama dentro da mesma VM ou criar um encaminhamento local controlado. O AgentSec rejeita endpoints remotos por padrão.
+### Planner is slow
 
-### Planner muito lento
-
-Use um modelo menor, mantenha uma única execução simultânea e limite o output:
+Use a smaller model, keep one execution at a time, and limit output:
 
 ```bash
-export AGENTSEC_OLLAMA_MODEL=qwen2.5-coder:14b
-export AGENTSEC_OLLAMA_TIMEOUT_SECONDS=180
-export AGENTSEC_OLLAMA_MAX_TOKENS=512
+export NIGHWATCH_OLLAMA_MODEL=qwen2.5-coder:14b
+export NIGHWATCH_OLLAMA_TIMEOUT_SECONDS=180
+export NIGHWATCH_OLLAMA_MAX_TOKENS=512
 ```
 
-## Licença e estado do projeto
+## Project layout
 
-O repositório está em fase inicial de desenvolvimento. Antes de usar em um programa real, revise o código, os termos do programa de bug bounty e o comportamento de cada ferramenta adicionada.
+```text
+src/agentsec/       compatibility implementation package
+src/nighwatch/      public Python module entrypoint
+examples/            safe synthetic observations and templates
+tests/               unit tests for policy, gateway, planner, and Ollama
+docs/                architecture and integration notes
+vendor/              reviewed third-party source snapshots
+```
+
+## License and project status
+
+Nighwatch is in early development. Review the source, the program rules, and every tool adapter before using it in a real engagement. The current version is a secure planning and dry-run control plane, not an autonomous production pentesting system.

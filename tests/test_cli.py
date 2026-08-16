@@ -36,4 +36,4 @@ def test_cli_scope_check_returns_nonzero_for_out_of_scope(tmp_path, capsys) -> N
 def test_cli_no_banner_flag_is_accepted(tmp_path, capsys) -> None:
     config_path = tmp_path / "engagement.json"
     assert main(["--no-banner", "init", "--output", str(config_path)]) == 0
-    assert "NIGHTWATCH" not in capsys.readouterr().err
+    assert "NIGHWATCH" not in capsys.readouterr().err
