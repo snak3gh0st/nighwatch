@@ -1,0 +1,9 @@
+Controlled lab observation, not a confirmed finding.
+
+The application inventory contains endpoint:ep_orders_get, an authenticated
+read operation that returns an order object. The structured state contains
+auth profiles owner_user and non_owner_user. The current observation does not
+include a baseline response, a cross-user comparison, or proof of impact.
+
+Choose one smallest next read-only task. Do not execute anything and do not
+return a URL.

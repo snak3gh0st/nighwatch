@@ -1,0 +1,26 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+dist/
+build/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+
+# Local engagement material can contain authorization documents, tokens, and PII.
+engagements/
+evidence/
+secrets/
+strix_runs/
+vendor/strix_runs/
+vendor/strix/strix/interface/viewer/frontend/
+vendor/strix/strix/interface/tui/cmd/
+vendor/strix/strix/interface/tui/internal/
+vendor/strix/strix/interface/tui/go.mod
+vendor/strix/strix/interface/tui/go.sum
+vendor/strix/strix/bin/
+*.local.json
