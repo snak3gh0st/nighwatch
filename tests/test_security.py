@@ -24,9 +24,20 @@ def test_action_policy_denies_mutation_by_default() -> None:
 
 
 def test_action_policy_accepts_valid_explicit_approval() -> None:
-    approver = ActionApprover(ActionPolicy(), approval_lookup=lambda value: value == "approval-1")
+    approver = ActionApprover(
+        ActionPolicy(state_mutation=True),
+        approval_lookup=lambda value: value == "approval-1",
+    )
     request = ActionRequest("a-1", "http", "https://authorized.example.com", "POST", RiskLevel.STATE_CHANGE, "test", "approval-1")
     assert approver.evaluate(request).allowed is True
+
+
+def test_explicit_approval_cannot_enable_disabled_risk_class() -> None:
+    approver = ActionApprover(ActionPolicy(), approval_lookup=lambda value: value == "approval-1")
+    request = ActionRequest("a-1", "http", "https://authorized.example.com", "POST", RiskLevel.STATE_CHANGE, "test", "approval-1")
+    decision = approver.evaluate(request)
+    assert decision.allowed is False
+    assert "disabled by engagement policy" in decision.reason
 
 
 def test_rate_limiter_paces_and_exhausts_budget() -> None:

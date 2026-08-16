@@ -32,7 +32,7 @@ EngagementConfig
   -> report export
 ```
 
-Strix must not receive an unbounded target or unrestricted credentials. The adapter must generate a bounded instruction file and pass only the authorized target material. The current Nighwatch CLI remains dry-run-only until this adapter exists.
+Strix must not receive an unbounded target or unrestricted credentials. The adapter must generate a bounded instruction file and pass only the authorized target material. The current CLI has explicit, policy-gated HTTP and proxy adapters, but it does not invoke the vendored engine; any future `nighwatch assess` integration must remain behind the same preflight and evidence boundary.
 
 ## What we reuse
 

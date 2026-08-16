@@ -7,7 +7,10 @@ HTTP, browser, scanner, and shell adapters must use before execution.
 from __future__ import annotations
 
 import json
+import os
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -68,11 +71,21 @@ class ActionApprover:
         self._approval_lookup = approval_lookup or (lambda _approval_id: False)
 
     def evaluate(self, request: ActionRequest) -> ApprovalDecision:
-        if self._policy.allows(request.risk):
+        if not self._policy.allows(request.risk):
+            return ApprovalDecision(
+                False,
+                f"{request.risk.value} actions are disabled by engagement policy",
+                request.action_id,
+            )
+        if request.risk == RiskLevel.READ_ONLY and self._policy.read_only:
             return ApprovalDecision(True, "risk level is allowed by engagement policy", request.action_id)
+        if request.risk == RiskLevel.STATE_CHANGE and self._policy.state_mutation and not self._policy.require_state_change_approval:
+            return ApprovalDecision(True, "state-changing actions are enabled without per-action approval", request.action_id)
+        if request.risk == RiskLevel.DESTRUCTIVE and self._policy.destructive and not self._policy.require_destructive_approval:
+            return ApprovalDecision(True, "destructive actions are enabled without per-action approval", request.action_id)
         if request.approval_id and self._approval_lookup(request.approval_id):
             return ApprovalDecision(True, "explicit approval is valid", request.action_id)
-        return ApprovalDecision(False, f"action risk {request.risk.value} is not approved", request.action_id)
+        return ApprovalDecision(False, f"action risk {request.risk.value} requires explicit approval", request.action_id)
 
 
 @dataclass(frozen=True)
@@ -95,25 +108,55 @@ class RateLimiter:
         self._clock = clock or time.monotonic
         self._last_request_at: float | None = None
         self._request_count = 0
+        self._lock = threading.Lock()
 
     @property
     def request_count(self) -> int:
         return self._request_count
 
     def acquire(self, now: float | None = None) -> RateDecision:
-        current = self._clock() if now is None else now
-        if self._request_count >= self._limits.max_requests:
-            return RateDecision(False, 0.0, "request budget exhausted", self._request_count)
+        with self._lock:
+            current = self._clock() if now is None else now
+            if self._request_count >= self._limits.max_requests:
+                return RateDecision(False, 0.0, "request budget exhausted", self._request_count)
 
-        interval = 1.0 / self._limits.requests_per_second
-        if self._last_request_at is not None:
-            elapsed = current - self._last_request_at
-            if elapsed < interval:
-                return RateDecision(True, interval - elapsed, "rate limit requires pacing", self._request_count)
+            interval = 1.0 / self._limits.requests_per_second
+            if self._last_request_at is not None:
+                elapsed = current - self._last_request_at
+                if elapsed < interval:
+                    return RateDecision(True, interval - elapsed, "rate limit requires pacing", self._request_count)
 
-        self._last_request_at = current
-        self._request_count += 1
-        return RateDecision(True, 0.0, "request permitted", self._request_count)
+            self._last_request_at = current
+            self._request_count += 1
+            return RateDecision(True, 0.0, "request permitted", self._request_count)
+
+
+class KillSwitch:
+    """Process and file based emergency stop checked before each action."""
+
+    def __init__(self, configured_file: str | None = None) -> None:
+        self._configured_file = configured_file
+
+    def tripped(self) -> bool:
+        value = os.getenv("NIGHWATCH_KILL_SWITCH", "").strip().lower()
+        if value in {"1", "true", "yes", "on", "stop"}:
+            return True
+        path = os.getenv("NIGHWATCH_KILL_SWITCH_FILE") or self._configured_file
+        return bool(path and os.path.isfile(path))
+
+
+class KillSwitchTripped(PermissionError):
+    """Raised when the operator emergency stop is active."""
+
+
+@contextmanager
+def bounded_slot(semaphore: threading.BoundedSemaphore):
+    """Hold one configured concurrent-execution slot for an adapter action."""
+    semaphore.acquire()
+    try:
+        yield
+    finally:
+        semaphore.release()
 
 
 _SENSITIVE_QUERY_KEYS = {

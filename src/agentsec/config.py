@@ -33,10 +33,18 @@ def template_config() -> dict[str, Any]:
         "actions": {
             "read_only": True,
             "state_mutation": False,
-            "destructive": False
+            "destructive": False,
+            "require_state_change_approval": True,
+            "require_destructive_approval": True
         },
         "network": {
             "allow_private_addresses": False
+        },
+        "active_testing": {
+            "enabled": False,
+            "max_payload_bytes": 8192,
+            "max_cases": 25,
+            "kill_switch_file": ".nighwatch-kill"
         }
     }
 
