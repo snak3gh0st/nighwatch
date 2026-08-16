@@ -18,6 +18,9 @@ dependencies = []
 dev = [
   "pytest>=8.0",
 ]
+browser = [
+  "playwright>=1.40,<2",
+]
 
 [project.scripts]
 nighwatch = "agentsec.cli:main"

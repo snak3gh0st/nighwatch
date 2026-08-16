@@ -4,6 +4,7 @@ from agentsec.findings import AuthorizationValidation
 from agentsec.models import EngagementConfig, RiskLevel
 from agentsec.planner import TaskProposal
 from agentsec.reasoning import ReasoningLoop
+from agentsec.state import InvestigationStateStore
 from tests.test_models import config_dict
 
 
@@ -13,6 +14,16 @@ class FakePlanner:
 
     def plan(self, _config: EngagementConfig, _observation: str) -> TaskProposal:
         return self.proposal
+
+
+class SequencePlanner:
+    def __init__(self, proposals: list[TaskProposal]) -> None:
+        self.proposals = list(proposals)
+
+    def plan(self, _config: EngagementConfig, _observation: str) -> TaskProposal:
+        if self.proposals:
+            return self.proposals.pop(0)
+        return _proposal("inspect_api")
 
 
 class FakeValidator:
@@ -78,3 +89,29 @@ def test_reasoning_loop_does_not_execute_unimplemented_task() -> None:
 
     assert result.status == "planned"
     assert validator.calls == []
+
+
+def test_reasoning_loop_persists_bounded_multi_step_state(tmp_path) -> None:
+    config = EngagementConfig.from_dict(config_dict())
+    validator = FakeValidator()
+    loop = ReasoningLoop(
+        SequencePlanner([_proposal("compare_authorization"), _proposal("inspect_api")]),
+        validator,
+    )
+    state_store = InvestigationStateStore(tmp_path / "investigation.json", config)
+    result = loop.run_many(
+        config,
+        "The observation shows an object endpoint.",
+        url="https://authorized.example.com/api/orders/1",
+        owner_profile="owner",
+        subject_profile="non-owner",
+        impact_fields={"email"},
+        max_steps=3,
+        state_store=state_store,
+    )
+
+    assert result.status == "planned"
+    assert len(result.steps) == 2
+    assert len(validator.calls) == 1
+    assert state_store.snapshot()["engagement_id"] == "eng-test"
+    assert (tmp_path / "investigation.json").stat().st_mode & 0o777 == 0o600

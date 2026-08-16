@@ -29,6 +29,10 @@ _SENSITIVE_BODY_KEYS = {
     "token",
 }
 _TOKEN_PATTERN = re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
+_SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)\b(?:authorization|cookie|set-cookie|x-api-key|x-auth-token|token|secret|password)"
+    r"\s*[:=]\s*[^\s,;]+"
+)
 
 
 def _redact_json(value: Any, key: str | None = None) -> Any:
@@ -52,6 +56,7 @@ def redact_body_preview(body: bytes, max_bytes: int = 8192) -> tuple[str, bool]:
         except (json.JSONDecodeError, TypeError, ValueError):
             pass
     text = _TOKEN_PATTERN.sub("[REDACTED]", text)
+    text = _SECRET_ASSIGNMENT_PATTERN.sub("[REDACTED]", text)
     return text, truncated
 
 

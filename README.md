@@ -30,9 +30,15 @@ The current slice implements the secure control-plane foundation:
 - a bounded GET/HEAD HTTP executor;
 - an append-only Evidence Store; and
 - a structured Application Map; and
-- one bounded observe-reason-test-verify cycle for authorization hypotheses.
+- an independently reproduced authorization validator;
+- a controlled, optional Playwright page inspector;
+- a fixed-argument traditional-tool registry; and
+- a bounded multi-step observe-reason-test-verify loop with persisted state.
 
-Browser, shell, scanner, and proxy execution remain disabled. The first executable slice performs only explicitly scoped GET/HEAD observations and records enough evidence to support the next reasoning step.
+Arbitrary shell execution, direct scanner execution, arbitrary browser actions,
+downloads, form submission, and proxy interception remain disabled. The
+executable slices perform only explicitly scoped read-only observations and
+record enough evidence to support the next reasoning step.
 
 ## What Nighwatch is meant to do
 
@@ -87,7 +93,8 @@ The policy is an executable restriction, not prompt text. The system must refuse
 - explicit written authorization for every target; and
 - a Linux or macOS terminal for the CLI.
 
-The runtime currently uses only the Python standard library. This keeps the control plane easy to audit before adding browser, HTTP, and scanner dependencies.
+The core runtime uses only the Python standard library. Playwright is an
+optional dependency for the controlled browser adapter.
 
 ## Installation
 
@@ -98,6 +105,13 @@ cd nighwatch
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install '.[dev]'
+```
+
+Install the optional browser adapter only when browser inspection is needed:
+
+```bash
+python -m pip install '.[browser]'
+playwright install chromium
 ```
 
 Validate the installation:
@@ -304,9 +318,58 @@ The validator requires distinct credential fingerprints, successful responses, a
 
 An HTTP `200` by itself is never enough to create a report.
 
-## Run one reasoning cycle
+## Inspect an authorized page with the controlled browser
 
-`investigate` connects the local planner to the bounded validator. The model receives only the observation and proposes one task. The URL and profile identities are supplied by the operator and remain outside the model's authority.
+The optional browser adapter creates a fresh headless Chromium context with no
+downloads or granted permissions. Every page request and subresource is sent
+through the Scope Guard, approval policy, rate limiter, and receipt logger.
+Requests outside scope and state-changing methods are aborted. The adapter
+does not click forms, submit data, evaluate model-supplied JavaScript, or
+follow a redirect outside the declared scope. It stores page metadata,
+sanitized request metadata, cookie metadata without values, and a bounded
+redacted text preview.
+
+```bash
+nighwatch browser inspect \
+  --config engagements/example.json \
+  --url https://authorized.example.com/app \
+  --profile owner_user \
+  --evidence-dir evidence/eng_acme_2026_001
+```
+
+The browser dependency is intentionally optional. If a target requires login,
+load a declared profile from `NIGHWATCH_AUTH_<PROFILE>_BEARER` or
+`NIGHWATCH_AUTH_<PROFILE>_COOKIE`; never place credentials in the configuration
+file or command-line arguments.
+
+## Inspect the deterministic tool registry
+
+Traditional tools are represented as fixed adapters, not as an unrestricted
+shell. The registry currently describes `httpx`, `katana`, `subfinder`,
+`nuclei`, and `ffuf`, including their risk and fixed flags:
+
+```bash
+nighwatch tools list
+nighwatch tools plan \
+  --config engagements/example.json \
+  --tool httpx \
+  --target https://authorized.example.com/
+```
+
+The plan command performs no network activity. Direct execution of these
+network tools remains disabled until each adapter can enforce per-request
+egress checks, redirect handling, rate limits, a kill switch, and evidence
+capture. The CLI accepts no arbitrary extra tool arguments. This prevents an
+LLM or operator typo from turning a low-volume observation into an uncontrolled
+scan.
+
+## Run a bounded multi-step reasoning loop
+
+`investigate` connects the local planner to the bounded validator. The model
+receives only the observation and proposes one task per step. The URL, profile
+identities, maximum number of steps, and executable adapters remain outside
+the model's authority. Candidate results can produce one short sanitized
+observation for the next planner call; repeated proposals stop the loop.
 
 ```bash
 nighwatch investigate \
@@ -316,10 +379,19 @@ nighwatch investigate \
   --owner-profile owner_user \
   --subject-profile non_owner_user \
   --impact-field email \
+  --max-steps 3 \
   --model qwen2.5-coder:14b
 ```
 
-The current loop intentionally executes only `compare_authorization` and `validate_candidate` proposals. Other proposals are returned as `planned` without network activity. This keeps the first adaptive loop narrow while preserving the same sequence for future agents:
+The loop writes `evidence/<engagement_id>/investigation.json`. It stores
+observation hashes, sanitized proposals, validation states, and the active
+policy hash. It does not persist raw observations, cookies, bearer tokens, or
+response bodies in the investigation state file.
+
+The current loop intentionally executes only `compare_authorization` and
+`validate_candidate` proposals. Other proposals are returned as `planned`
+without network activity. This keeps the first adaptive loop narrow while
+preserving the same sequence for future agents:
 
 ```text
 Observe -> Reason -> Policy check -> Execute -> Evidence -> Verify
@@ -366,15 +438,24 @@ Candidate Finding
 
 Only the final state is reportable. Evidence should include the relevant request and response, authentication profile, timestamp, policy hash, action receipt, reproduction steps, and a safe impact explanation. State-changing or destructive actions require explicit approval and must remain disabled by default.
 
-## Recommended implementation order
+## Implemented and next implementation order
+
+Completed in the current MVP:
 
 1. authenticated profile comparison with two or more sessions;
-2. bounded reasoning loop: observe, reason, hypothesize, test, and observe again;
+2. bounded reasoning loop with persisted state;
 3. independent IDOR/BOLA and API authorization validator;
-4. controlled browser adapter for approved workflows;
-5. adapters for deterministic reconnaissance and fuzzing tools behind the gateway;
-6. independent finding rejection states; and
-7. report generation in Markdown, JSON, SARIF, and PDF.
+4. controlled browser observation adapter; and
+5. fixed-argument tool registry and non-executing tool plans.
+
+Next, in order:
+
+1. a local egress proxy so deterministic tools can be executed request by request;
+2. authenticated session setup workflows that require explicit human approval;
+3. GraphQL and API-specific observation parsers;
+4. independent validators for SSRF, XSS, race conditions, and business logic;
+5. rejected-finding and reviewer workflows; and
+6. report generation in Markdown, JSON, SARIF, and PDF.
 
 Traditional tools should provide observations, not final authority. Scanner output must never become a finding without verification and reproducible evidence.
 
@@ -433,4 +514,7 @@ vendor/              reviewed third-party source snapshots
 
 ## License and project status
 
-Nighwatch is in early development. Review the source, the program rules, and every tool adapter before using it in a real engagement. The current version is a secure planning and dry-run control plane, not an autonomous production pentesting system.
+Nighwatch is in early development. Review the source, the program rules, and
+every adapter before using it in a real engagement. The current version is a
+scope-enforced read-only testing assistant, not an autonomous production
+pentesting system.
