@@ -176,6 +176,7 @@ class EngagementConfig:
     limits: RateLimits
     actions: ActionPolicy
     authorization_artifact_id: str
+    allow_private_addresses: bool = False
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "EngagementConfig":
@@ -202,6 +203,13 @@ class EngagementConfig:
         if not isinstance(auth_raw, list) or any(not isinstance(item, str) for item in auth_raw):
             raise ConfigError("auth_profiles must be a list of profile identifiers")
 
+        network_raw = raw.get("network", {})
+        if not isinstance(network_raw, dict):
+            raise ConfigError("network must be an object")
+        allow_private_addresses = network_raw.get("allow_private_addresses", False)
+        if not isinstance(allow_private_addresses, bool):
+            raise ConfigError("network.allow_private_addresses must be a boolean")
+
         return cls(
             engagement_id=engagement_id,
             allowed_origins=tuple(ScopeOrigin.from_dict(item) for item in origins_raw),
@@ -210,6 +218,7 @@ class EngagementConfig:
             limits=RateLimits.from_dict(raw.get("limits")),
             actions=ActionPolicy.from_dict(raw.get("actions")),
             authorization_artifact_id=str(authorization["artifact_id"]).strip(),
+            allow_private_addresses=allow_private_addresses,
         )
 
     @classmethod
@@ -232,6 +241,7 @@ class EngagementConfig:
             "auth_profiles": list(self.auth_profiles),
             "limits": asdict(self.limits),
             "actions": asdict(self.actions),
+            "network": {"allow_private_addresses": self.allow_private_addresses},
         }
 
     @property

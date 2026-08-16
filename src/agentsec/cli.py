@@ -3,18 +3,27 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 from pathlib import Path
 from typing import Sequence
 
 from . import __version__
+from .browser import BrowserExecutorError, PlaywrightBrowserExecutor
 from .config import write_template
-from .gateway import ToolGateway
+from .evidence import EvidenceStore
+from .findings import AuthorizationValidator
+from .gateway import GatewayBlocked, ToolGateway
+from .http_executor import HttpExecutor, HttpExecutorError
 from .llm import OllamaClient, OllamaConfig, OllamaError
+from .mapping import ApplicationMapStore
 from .models import ConfigError, EngagementConfig, RiskLevel
 from .planner import OllamaPlanner
-from .security import ActionRequest
+from .reasoning import ReasoningLoop
+from .security import ActionRequest, ReceiptLogger, redact_url
+from .state import InvestigationStateStore
+from .tools import DeterministicToolRunner, ToolExecutionBlocked, ToolRegistry
 
 DISPLAY_NAME = "NIGHWATCH"
 
@@ -68,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     policy = commands.add_parser("policy", help="inspect the effective policy")
     policy.add_argument("--config", required=True)
 
-    run = commands.add_parser("run", help="show a safe plan; execution is intentionally disabled in this slice")
+    run = commands.add_parser("run", help="show a safe plan; use http request for the bounded HTTP slice")
     run.add_argument("--config", required=True)
     run.add_argument("--dry-run", action="store_true")
 
@@ -81,6 +90,72 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--config", required=True)
     plan.add_argument("--observation", required=True, help="path to an observation text file")
     plan.add_argument("--model")
+
+    http = commands.add_parser("http", help="perform a bounded authorized HTTP observation")
+    http_commands = http.add_subparsers(dest="http_command", required=True)
+    request = http_commands.add_parser("request", help="execute only an in-scope GET or HEAD request")
+    request.add_argument("--config", required=True)
+    request.add_argument("--url", required=True)
+    request.add_argument("--method", choices=["GET", "HEAD"], default="GET")
+    request.add_argument("--profile", help="declared auth profile; secret is loaded from the environment")
+    request.add_argument("--evidence-dir", help="local evidence directory (default: evidence/<engagement_id>)")
+    request.add_argument("--timeout", type=float, default=15.0)
+    request.add_argument("--max-body-bytes", type=int, default=1_048_576)
+    request.add_argument("--capture-body", action="store_true", help="store a bounded redacted body preview")
+    request.add_argument("--purpose", default="authorized application observation")
+
+    authz = commands.add_parser("authz", help="compare declared authenticated profiles")
+    authz_commands = authz.add_subparsers(dest="authz_command", required=True)
+    compare = authz_commands.add_parser("compare", help="independently validate object-level authorization")
+    compare.add_argument("--config", required=True)
+    compare.add_argument("--url", required=True)
+    compare.add_argument("--owner-profile", required=True)
+    compare.add_argument("--subject-profile", required=True)
+    compare.add_argument("--impact-field", action="append", default=[], help="field that must be visible to demonstrate impact")
+    compare.add_argument("--evidence-dir", help="local evidence directory (default: evidence/<engagement_id>)")
+    compare.add_argument("--timeout", type=float, default=15.0)
+    compare.add_argument("--max-body-bytes", type=int, default=1_048_576)
+
+    investigate = commands.add_parser("investigate", help="run one bounded observe-reason-test-verify cycle")
+    investigate.add_argument("--config", required=True)
+    investigate.add_argument("--observation", required=True, help="path to an untrusted observation text file")
+    investigate.add_argument("--url", required=True, help="explicit in-scope URL for the bounded authorization test")
+    investigate.add_argument("--owner-profile", required=True)
+    investigate.add_argument("--subject-profile", required=True)
+    investigate.add_argument("--impact-field", action="append", default=[])
+    investigate.add_argument("--evidence-dir", help="local evidence directory (default: evidence/<engagement_id>)")
+    investigate.add_argument("--model")
+    investigate.add_argument("--timeout", type=float, default=15.0)
+    investigate.add_argument("--max-body-bytes", type=int, default=1_048_576)
+    investigate.add_argument("--max-steps", type=int, default=3, help="bounded planner/validator steps (1-10)")
+    investigate.add_argument("--state-file", help="permission-restricted investigation state file")
+
+    browser = commands.add_parser("browser", help="inspect one page through the controlled Playwright adapter")
+    browser_commands = browser.add_subparsers(dest="browser_command", required=True)
+    inspect = browser_commands.add_parser("inspect", help="observe a page without form submission or downloads")
+    inspect.add_argument("--config", required=True)
+    inspect.add_argument("--url", required=True)
+    inspect.add_argument("--profile", help="declared auth profile; secret is loaded from the environment")
+    inspect.add_argument("--evidence-dir", help="local evidence directory (default: evidence/<engagement_id>)")
+    inspect.add_argument("--timeout", type=float, default=30.0)
+    inspect.add_argument(
+        "--wait-until",
+        choices=["commit", "domcontentloaded", "load", "networkidle"],
+        default="domcontentloaded",
+    )
+
+    tools = commands.add_parser("tools", help="inspect the fixed deterministic tool registry")
+    tools_commands = tools.add_subparsers(dest="tools_command", required=True)
+    tools_commands.add_parser("list", help="list registered tools and whether their binaries are installed")
+    tool_plan = tools_commands.add_parser("plan", help="show a fixed-argument plan without executing it")
+    tool_plan.add_argument("--config", required=True)
+    tool_plan.add_argument("--tool", required=True, choices=["ffuf", "httpx", "katana", "nuclei", "subfinder"])
+    tool_plan.add_argument("--target", required=True)
+    tool_run = tools_commands.add_parser("run", help="execute an enabled fixed-argument adapter")
+    tool_run.add_argument("--config", required=True)
+    tool_run.add_argument("--tool", required=True, choices=["ffuf", "httpx", "katana", "nuclei", "subfinder"])
+    tool_run.add_argument("--target", required=True)
+    tool_run.add_argument("--evidence-dir", help="local evidence directory (default: evidence/<engagement_id>)")
 
     return parser
 
@@ -114,8 +189,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     config = _load(args.config)
     if not args.dry_run:
         print(
-            "execution blocked: the HTTP/browser/shell Tool Gateway is not enabled yet; "
-            "use --dry-run to inspect the bounded plan",
+            "execution blocked: the general orchestrator is not enabled yet; "
+            "use http request or investigate for the bounded read-only slice",
             file=sys.stderr,
         )
         return 3
@@ -179,6 +254,165 @@ def _cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_http_request(args: argparse.Namespace) -> int:
+    config = _load(args.config)
+    evidence_dir = Path(args.evidence_dir) if args.evidence_dir else Path("evidence") / config.engagement_id
+    evidence_store = EvidenceStore(evidence_dir)
+    gateway = ToolGateway(config, receipt_logger=ReceiptLogger(evidence_dir / "receipts.jsonl"))
+    map_store = ApplicationMapStore(evidence_dir / "application_map.json")
+    executor = HttpExecutor(
+        config,
+        gateway,
+        evidence_store,
+        map_store,
+        timeout_seconds=args.timeout,
+        max_body_bytes=args.max_body_bytes,
+        capture_body=args.capture_body,
+    )
+    observation = executor.execute(
+        args.url,
+        method=args.method,
+        auth_profile=args.profile,
+        purpose=args.purpose,
+    )
+    response = observation.response
+    print(json.dumps({
+        "executed": True,
+        "engagement_id": config.engagement_id,
+        "policy_hash": config.policy_hash,
+        "action_id": observation.action_id,
+        "evidence_id": observation.evidence_id,
+        "endpoint_id": observation.endpoint_id,
+        "auth_profile": observation.auth_profile,
+        "request": {"method": response.method, "url": redact_url(args.url)},
+        "response": {
+            "status": response.status,
+            "reason": response.reason,
+            "body_length": len(response.body),
+            "body_truncated": response.body_truncated,
+            "elapsed_ms": response.elapsed_ms,
+        },
+        "evidence_dir": str(evidence_dir),
+        "network_executed": True,
+    }, indent=2))
+    return 0
+
+
+def _cmd_authz_compare(args: argparse.Namespace) -> int:
+    config = _load(args.config)
+    evidence_dir = Path(args.evidence_dir) if args.evidence_dir else Path("evidence") / config.engagement_id
+    evidence_store = EvidenceStore(evidence_dir)
+    gateway = ToolGateway(config, receipt_logger=ReceiptLogger(evidence_dir / "receipts.jsonl"))
+    map_store = ApplicationMapStore(evidence_dir / "application_map.json")
+    executor = HttpExecutor(
+        config,
+        gateway,
+        evidence_store,
+        map_store,
+        timeout_seconds=args.timeout,
+        max_body_bytes=args.max_body_bytes,
+        capture_body=True,
+    )
+    result = AuthorizationValidator(
+        executor,
+        evidence_store,
+        report_dir=evidence_dir / "reports",
+    ).compare(
+        args.url,
+        owner_profile=args.owner_profile,
+        subject_profile=args.subject_profile,
+        impact_fields={field.strip() for field in args.impact_field if field.strip()},
+    )
+    print(json.dumps(result.to_dict(), indent=2))
+    return {"verified": 0, "candidate": 1, "rejected": 2}[result.status]
+
+
+def _cmd_investigate(args: argparse.Namespace) -> int:
+    config = _load(args.config)
+    try:
+        observation = Path(args.observation).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"cannot read observation file: {exc}") from exc
+    if len(observation) > 16_000:
+        raise ConfigError("observation file exceeds the 16,000 character planning limit")
+
+    evidence_dir = Path(args.evidence_dir) if args.evidence_dir else Path("evidence") / config.engagement_id
+    evidence_store = EvidenceStore(evidence_dir)
+    gateway = ToolGateway(config, receipt_logger=ReceiptLogger(evidence_dir / "receipts.jsonl"))
+    state_store = InvestigationStateStore(
+        Path(args.state_file) if args.state_file else evidence_dir / "investigation.json",
+        config,
+    )
+    executor = HttpExecutor(
+        config,
+        gateway,
+        evidence_store,
+        ApplicationMapStore(evidence_dir / "application_map.json"),
+        timeout_seconds=args.timeout,
+        max_body_bytes=args.max_body_bytes,
+        capture_body=True,
+    )
+    result = ReasoningLoop(
+        OllamaPlanner(OllamaClient(OllamaConfig.from_env(model_override=args.model))),
+        AuthorizationValidator(executor, evidence_store, evidence_dir / "reports"),
+    ).run_many(
+        config,
+        observation,
+        url=args.url,
+        owner_profile=args.owner_profile,
+        subject_profile=args.subject_profile,
+        impact_fields={field.strip() for field in args.impact_field if field.strip()},
+        max_steps=args.max_steps,
+        state_store=state_store,
+    )
+    print(json.dumps(result.to_dict(), indent=2))
+    return {"verified": 0, "candidate": 1, "rejected": 2, "planned": 1}[result.status]
+
+
+def _cmd_browser_inspect(args: argparse.Namespace) -> int:
+    config = _load(args.config)
+    evidence_dir = Path(args.evidence_dir) if args.evidence_dir else Path("evidence") / config.engagement_id
+    evidence_store = EvidenceStore(evidence_dir)
+    gateway = ToolGateway(config, receipt_logger=ReceiptLogger(evidence_dir / "receipts.jsonl"))
+    executor = PlaywrightBrowserExecutor(
+        config,
+        gateway,
+        evidence_store,
+        ApplicationMapStore(evidence_dir / "application_map.json"),
+        timeout_seconds=args.timeout,
+    )
+    result = asyncio.run(executor.inspect(args.url, auth_profile=args.profile, wait_until=args.wait_until))
+    print(json.dumps(result.to_dict(), indent=2))
+    return 0 if result.error is None else 1
+
+
+def _cmd_tools_list(_args: argparse.Namespace) -> int:
+    print(json.dumps({"tools": ToolRegistry().list()}, indent=2))
+    return 0
+
+
+def _tool_runner(args: argparse.Namespace) -> DeterministicToolRunner:
+    config = _load(args.config)
+    evidence_dir = Path(args.evidence_dir) if getattr(args, "evidence_dir", None) else Path("evidence") / config.engagement_id
+    return DeterministicToolRunner(
+        config,
+        ToolGateway(config, receipt_logger=ReceiptLogger(evidence_dir / "receipts.jsonl")),
+        EvidenceStore(evidence_dir),
+    )
+
+
+def _cmd_tools_plan(args: argparse.Namespace) -> int:
+    runner = _tool_runner(args)
+    print(json.dumps(runner.plan(args.tool, args.target).to_dict(), indent=2))
+    return 0
+
+
+def _cmd_tools_run(args: argparse.Namespace) -> int:
+    runner = _tool_runner(args)
+    print(json.dumps(runner.run(args.tool, args.target).to_dict(), indent=2))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -201,7 +435,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_llm_health(args)
         if args.command == "plan":
             return _cmd_plan(args)
-    except (ConfigError, FileExistsError, OllamaError, OSError) as exc:
+        if args.command == "http" and args.http_command == "request":
+            return _cmd_http_request(args)
+        if args.command == "authz" and args.authz_command == "compare":
+            return _cmd_authz_compare(args)
+        if args.command == "investigate":
+            return _cmd_investigate(args)
+        if args.command == "browser" and args.browser_command == "inspect":
+            return _cmd_browser_inspect(args)
+        if args.command == "tools" and args.tools_command == "list":
+            return _cmd_tools_list(args)
+        if args.command == "tools" and args.tools_command == "plan":
+            return _cmd_tools_plan(args)
+        if args.command == "tools" and args.tools_command == "run":
+            return _cmd_tools_run(args)
+    except (
+        ConfigError,
+        FileExistsError,
+        GatewayBlocked,
+        HttpExecutorError,
+        BrowserExecutorError,
+        ToolExecutionBlocked,
+        OllamaError,
+        OSError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     parser.error("unknown command")

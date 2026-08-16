@@ -34,6 +34,9 @@ def template_config() -> dict[str, Any]:
             "read_only": True,
             "state_mutation": False,
             "destructive": False
+        },
+        "network": {
+            "allow_private_addresses": False
         }
     }
 
