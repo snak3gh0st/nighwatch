@@ -27,6 +27,12 @@ def test_remote_ollama_is_denied_by_default() -> None:
         OllamaConfig(base_url="http://10.0.0.8:11434")
 
 
+def test_nighwatch_ollama_env_precedes_legacy_agentsec_env(monkeypatch) -> None:
+    monkeypatch.setenv("AGENTSEC_OLLAMA_MODEL", "legacy-model")
+    monkeypatch.setenv("NIGHWATCH_OLLAMA_MODEL", "nighwatch-model")
+    assert OllamaConfig.from_env().model == "nighwatch-model"
+
+
 def test_chat_uses_structured_output_and_parses_tool_calls(monkeypatch) -> None:
     captured: dict = {}
 

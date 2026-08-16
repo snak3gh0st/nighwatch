@@ -3,14 +3,14 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentsec"
+name = "nighwatch"
 version = "0.1.0"
-description = "Linux-first, scope-enforced AI security testing control plane"
+description = "Nighwatch: Linux-first, scope-enforced AI security testing control plane"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "UNLICENSED" }
 authors = [
-  { name = "AgentSec contributors" },
+  { name = "snak3gh0st" },
 ]
 dependencies = []
 
@@ -20,6 +20,8 @@ dev = [
 ]
 
 [project.scripts]
+nighwatch = "agentsec.cli:main"
+nightwatch = "agentsec.cli:main"
 agentsec = "agentsec.cli:main"
 
 [tool.setuptools.packages.find]

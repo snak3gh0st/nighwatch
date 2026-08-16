@@ -1,6 +1,6 @@
 # Strix integration boundary
 
-AgentSec uses Strix as an upstream pentesting and reporting engine. The source is vendored under `vendor/strix/` so the project can pin a reviewed upstream revision and apply local security controls without silently changing Strix behavior.
+Nighwatch uses Strix as an upstream pentesting and reporting engine. The source is vendored under `vendor/strix/` so the project can pin a reviewed upstream revision and apply local security controls without silently changing Strix behavior.
 
 ## Imported components
 
@@ -16,7 +16,7 @@ The vendor snapshot includes the modules needed for the first integration bounda
 
 The snapshot was imported from commit `85513391305171ecc6faffe03da4a8bda5e3febb`. Update it deliberately and record the new commit in `THIRD_PARTY_NOTICES.md`.
 
-## AgentSec boundary
+## Nighwatch boundary
 
 The integration must follow this order:
 
@@ -32,7 +32,7 @@ EngagementConfig
   -> report export
 ```
 
-Strix must not receive an unbounded target or unrestricted credentials. The adapter must generate a bounded instruction file and pass only the authorized target material. The current AgentSec CLI remains dry-run-only until this adapter exists.
+Strix must not receive an unbounded target or unrestricted credentials. The adapter must generate a bounded instruction file and pass only the authorized target material. The current Nighwatch CLI remains dry-run-only until this adapter exists.
 
 ## What we reuse
 
@@ -57,4 +57,4 @@ Strix must not receive an unbounded target or unrestricted credentials. The adap
 
 ## Safety rule
 
-Do not expose the vendored Strix CLI as a generic `target` passthrough. A future `agentsec assess` command must accept an engagement configuration, validate every target, and refuse to start when the policy, authorization reference or execution budget is invalid.
+Do not expose the vendored Strix CLI as a generic `target` passthrough. A future `nighwatch assess` command must accept an engagement configuration, validate every target, and refuse to start when the policy, authorization reference or execution budget is invalid.

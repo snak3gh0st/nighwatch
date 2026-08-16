@@ -1,4 +1,4 @@
-"""AgentSec command-line interface."""
+"""Nighwatch command-line interface."""
 
 from __future__ import annotations
 
@@ -16,14 +16,39 @@ from .models import ConfigError, EngagementConfig, RiskLevel
 from .planner import OllamaPlanner
 from .security import ActionRequest
 
+DISPLAY_NAME = "NIGHWATCH"
+
+
+def _print_banner() -> None:
+    """Show the interactive CLI identity without contaminating stdout/JSON."""
+    if not sys.stderr.isatty():
+        return
+
+    color = "\033[38;5;45m"
+    muted = "\033[38;5;245m"
+    reset = "\033[0m"
+    print(
+        f"{color}╭──────────────────────────────────────────────────────╮\n"
+        f"│  {DISPLAY_NAME:<50}│\n"
+        f"│  scope-enforced AI security lab                     │\n"
+        f"│  by snak3gh0st                                      │\n"
+        f"│  AUTHORIZED TARGETS ONLY • EVERY ACTION LOGGED      │\n"
+        f"╰──────────────────────────────────────────────────────╯{reset}\n"
+        f"{muted}ready: policy first, evidence always{reset}",
+        file=sys.stderr,
+    )
+
 
 def _load(path: str) -> EngagementConfig:
     return EngagementConfig.from_file(path)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="agentsec", description="Secure-by-default AI security testing control plane")
+    invoked_as = Path(sys.argv[0]).name.lower()
+    program = invoked_as if invoked_as in {"nighwatch", "nightwatch", "agentsec"} else "nighwatch"
+    parser = argparse.ArgumentParser(prog=program, description="Nighwatch secure-by-default AI security testing control plane")
     parser.add_argument("--version", action="version", version=__version__)
+    parser.add_argument("--no-banner", action="store_true", help="suppress the interactive startup banner")
     commands = parser.add_subparsers(dest="command", required=True)
 
     init = commands.add_parser("init", help="create a non-secret engagement template")
@@ -157,6 +182,8 @@ def _cmd_plan(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if not args.no_banner:
+        _print_banner()
     try:
         if args.command == "init":
             write_template(args.output)

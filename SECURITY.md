@@ -1,6 +1,6 @@
 # Segurança e uso autorizado
 
-AgentSec é destinado exclusivamente a testes de segurança autorizados.
+Nighwatch é destinado exclusivamente a testes de segurança autorizados.
 
 Antes de iniciar uma execução, o operador deve possuir autorização escrita que identifique:
 
