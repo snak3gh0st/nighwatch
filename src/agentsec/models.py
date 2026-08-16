@@ -26,6 +26,13 @@ class RiskLevel(str, Enum):
     DESTRUCTIVE = "destructive"
 
 
+def _strict_bool(raw: Any, field: str, default: bool) -> bool:
+    value = default if raw is None else raw
+    if not isinstance(value, bool):
+        raise ConfigError(f"{field} must be a boolean")
+    return value
+
+
 def normalize_host(host: str) -> str:
     """Normalize a DNS name without resolving it.
 
@@ -140,14 +147,26 @@ class ActionPolicy:
     read_only: bool = True
     state_mutation: bool = False
     destructive: bool = False
+    require_state_change_approval: bool = True
+    require_destructive_approval: bool = True
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> "ActionPolicy":
         raw = raw or {}
         return cls(
-            read_only=bool(raw.get("read_only", True)),
-            state_mutation=bool(raw.get("state_mutation", False)),
-            destructive=bool(raw.get("destructive", False)),
+            read_only=_strict_bool(raw.get("read_only"), "actions.read_only", True),
+            state_mutation=_strict_bool(raw.get("state_mutation"), "actions.state_mutation", False),
+            destructive=_strict_bool(raw.get("destructive"), "actions.destructive", False),
+            require_state_change_approval=_strict_bool(
+                raw.get("require_state_change_approval"),
+                "actions.require_state_change_approval",
+                True,
+            ),
+            require_destructive_approval=_strict_bool(
+                raw.get("require_destructive_approval"),
+                "actions.require_destructive_approval",
+                True,
+            ),
         )
 
     def allows(self, risk: RiskLevel) -> bool:
@@ -156,6 +175,39 @@ class ActionPolicy:
             RiskLevel.STATE_CHANGE: self.state_mutation,
             RiskLevel.DESTRUCTIVE: self.destructive,
         }[risk]
+
+
+@dataclass(frozen=True)
+class ActiveTestingPolicy:
+    """Limits for active requests and bounded payload probing."""
+
+    enabled: bool = False
+    max_payload_bytes: int = 8_192
+    max_cases: int = 25
+    kill_switch_file: str | None = None
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any] | None) -> "ActiveTestingPolicy":
+        raw = raw or {}
+        enabled = _strict_bool(raw.get("enabled"), "active_testing.enabled", False)
+        try:
+            max_payload_bytes = int(raw.get("max_payload_bytes", 8_192))
+            max_cases = int(raw.get("max_cases", 25))
+        except (TypeError, ValueError) as exc:
+            raise ConfigError("active_testing limits contain an invalid numeric value") from exc
+        if max_payload_bytes <= 0 or max_payload_bytes > 1_048_576:
+            raise ConfigError("active_testing.max_payload_bytes must be between 1 and 1048576")
+        if max_cases <= 0 or max_cases > 10_000:
+            raise ConfigError("active_testing.max_cases must be between 1 and 10000")
+        kill_switch_file = raw.get("kill_switch_file")
+        if kill_switch_file is not None and (not isinstance(kill_switch_file, str) or not kill_switch_file.strip()):
+            raise ConfigError("active_testing.kill_switch_file must be a non-empty string or null")
+        return cls(
+            enabled=enabled,
+            max_payload_bytes=max_payload_bytes,
+            max_cases=max_cases,
+            kill_switch_file=kill_switch_file.strip() if isinstance(kill_switch_file, str) else None,
+        )
 
 
 @dataclass(frozen=True)
@@ -177,6 +229,7 @@ class EngagementConfig:
     actions: ActionPolicy
     authorization_artifact_id: str
     allow_private_addresses: bool = False
+    active_testing: ActiveTestingPolicy = ActiveTestingPolicy()
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "EngagementConfig":
@@ -206,9 +259,11 @@ class EngagementConfig:
         network_raw = raw.get("network", {})
         if not isinstance(network_raw, dict):
             raise ConfigError("network must be an object")
-        allow_private_addresses = network_raw.get("allow_private_addresses", False)
-        if not isinstance(allow_private_addresses, bool):
-            raise ConfigError("network.allow_private_addresses must be a boolean")
+        allow_private_addresses = _strict_bool(
+            network_raw.get("allow_private_addresses"),
+            "network.allow_private_addresses",
+            False,
+        )
 
         return cls(
             engagement_id=engagement_id,
@@ -219,6 +274,7 @@ class EngagementConfig:
             actions=ActionPolicy.from_dict(raw.get("actions")),
             authorization_artifact_id=str(authorization["artifact_id"]).strip(),
             allow_private_addresses=allow_private_addresses,
+            active_testing=ActiveTestingPolicy.from_dict(raw.get("active_testing")),
         )
 
     @classmethod
@@ -242,6 +298,7 @@ class EngagementConfig:
             "limits": asdict(self.limits),
             "actions": asdict(self.actions),
             "network": {"allow_private_addresses": self.allow_private_addresses},
+            "active_testing": asdict(self.active_testing),
         }
 
     @property

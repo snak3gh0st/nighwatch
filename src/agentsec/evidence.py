@@ -116,6 +116,8 @@ class EvidenceStore:
         response_headers: Mapping[str, str] | None,
         response_body: bytes = b"",
         response_truncated: bool = False,
+        request_body: bytes = b"",
+        payload_label: str | None = None,
         elapsed_ms: float | None = None,
         error: str | None = None,
         capture_body: bool = False,
@@ -141,6 +143,21 @@ class EvidenceStore:
                 response["body_preview"] = preview
                 response["body_preview_truncated"] = preview_was_truncated
 
+        request: dict[str, Any] = {
+            "method": method.upper(),
+            "url": redact_url(url),
+            "headers": redact_headers(dict(request_headers)),
+        }
+        if request_body:
+            request["body_sha256"] = hashlib.sha256(request_body).hexdigest()
+            request["body_length"] = len(request_body)
+            if capture_body:
+                request_preview, request_preview_truncated = redact_body_preview(request_body, self.body_preview_bytes)
+                request["body_preview"] = request_preview
+                request["body_preview_truncated"] = request_preview_truncated
+        if payload_label:
+            request["payload_label"] = str(payload_label)[:160]
+
         return self.append(
             "http_exchange",
             {
@@ -148,11 +165,7 @@ class EvidenceStore:
                 "policy_hash": policy_hash,
                 "action_id": action_id,
                 "auth_profile": auth_profile,
-                "request": {
-                    "method": method.upper(),
-                    "url": redact_url(url),
-                    "headers": redact_headers(dict(request_headers)),
-                },
+                "request": request,
                 "response": response,
                 "error": error,
             },

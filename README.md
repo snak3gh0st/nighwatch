@@ -11,7 +11,7 @@ Nighwatch is not a spray scanner that blindly runs hundreds of templates. It is 
 5. reproducible evidence; and
 6. a human-reviewable final report.
 
-The central rule is simple: the model may propose the next bounded task, but it never gets direct access to the network, browser, shell, or security tools. Any future execution must pass through the policy and execution controls described below.
+The central rule is simple: the model may propose the next bounded task, but it never gets direct access to the network, browser, shell, or security tools. Every executable adapter must pass through the policy and execution controls described below. Active methods and payloads remain disabled unless the engagement explicitly enables them.
 
 ## Current status
 
@@ -26,19 +26,23 @@ The current slice implements the secure control-plane foundation:
 - redaction of sensitive headers and parameters;
 - a local Ollama client with structured JSON output;
 - a Planner that proposes one bounded next task; and
-- a dry-run Tool Gateway;
-- a bounded GET/HEAD HTTP executor;
+- a policy-enforced Tool Gateway;
+- a bounded HTTP executor for GET, HEAD, OPTIONS, POST, PUT, PATCH, and DELETE;
 - an append-only Evidence Store; and
 - a structured Application Map; and
 - an independently reproduced authorization validator;
 - a controlled, optional Playwright page inspector;
-- a fixed-argument traditional-tool registry; and
+- a fixed-argument traditional-tool registry with a local request-aware proxy adapter; and
+- a bounded active probe engine for operator-owned body templates; and
 - a bounded multi-step observe-reason-test-verify loop with persisted state.
 
 Arbitrary shell execution, direct scanner execution, arbitrary browser actions,
-downloads, form submission, and proxy interception remain disabled. The
-executable slices perform only explicitly scoped read-only observations and
-record enough evidence to support the next reasoning step.
+downloads, form submission through the browser, and HTTPS CONNECT interception
+remain disabled. Controlled active HTTP requests require an enabled policy,
+an in-scope method, an explicit approval identifier when configured, rate and
+concurrency limits, and evidence capture. Tool adapters can run only through
+the loopback request-aware proxy and only for HTTP targets until a reviewed
+TLS interception adapter is available.
 
 ## What Nighwatch is meant to do
 
@@ -76,7 +80,7 @@ EngagementConfig -> Scope Guard -> Rate Limiter -> Action Approval
         |                                      |
         v                                      v
   Ollama Planner                         Tool Gateway
-        |                              (future adapters)
+        |                           (HTTP / active / proxy)
         v                                      |
   Task Proposal -------------------------------+
                                                v
@@ -225,7 +229,43 @@ Example of a deliberately narrow configuration:
 }
 ```
 
-Start with explicit hosts, paths, and `GET` only. Do not use wildcard domains or include subdomains that are not explicitly in scope.
+Start with explicit hosts, paths, and `GET` only. Do not use wildcard domains or include subdomains that are not explicitly in scope. Enable active methods only when the program rules explicitly allow the specific operation.
+
+For a controlled active engagement, the origin must list the methods and the
+policy must enable active testing. State-changing and destructive actions are
+still approval-gated:
+
+```json
+{
+  "allowed_origins": [
+    {
+      "scheme": "https",
+      "host": "authorized.example.com",
+      "ports": [443],
+      "path_prefixes": ["/api/test-fixtures/"],
+      "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    }
+  ],
+  "actions": {
+    "read_only": true,
+    "state_mutation": true,
+    "destructive": false,
+    "require_state_change_approval": true,
+    "require_destructive_approval": true
+  },
+  "active_testing": {
+    "enabled": true,
+    "max_payload_bytes": 8192,
+    "max_cases": 25,
+    "kill_switch_file": ".nighwatch-kill"
+  }
+}
+```
+
+Keep active paths narrower than the read-only application map. Treat the
+approval identifier as an operator-controlled local gate in this MVP; it does
+not replace the program's written authorization or an external approval
+system.
 
 ## Validate scope before testing
 
@@ -254,12 +294,16 @@ nighwatch run \
 Without `--dry-run`, the general orchestration remains blocked:
 
 ```text
-execution blocked: the general orchestrator is not enabled yet; use http request for the bounded HTTP slice
+execution blocked: the general orchestrator is not enabled yet; use an explicit bounded adapter
 ```
 
-## Run one bounded HTTP observation
+## Run bounded HTTP observations and active requests
 
-The first execution slice supports only `GET` and `HEAD`. Every request passes through the declared scope, read-only action policy, rate limiter, budget, DNS address check, receipt logger, and evidence store.
+Every request passes through the declared scope, action policy, rate limiter,
+request budget, concurrency limit, DNS address check, kill switch, receipt
+logger, and evidence store. `GET`, `HEAD`, and `OPTIONS` are read-only. `POST`,
+`PUT`, and `PATCH` are state-changing. `DELETE` is destructive and should stay
+disabled unless the program explicitly authorizes it.
 
 For a profile that needs a bearer token, load the secret into the process environment instead of writing it to the engagement file or shell arguments:
 
@@ -272,6 +316,49 @@ nighwatch http request \
   --method GET \
   --profile owner_user \
   --capture-body
+```
+
+For an explicitly authorized state-changing test, keep the body in a file and
+pass a local approval identifier. The body is size-limited and is never taken
+from an LLM-generated command line:
+
+```bash
+printf '%s' '{"name":"nighwatch-canary"}' > /tmp/nighwatch-test-body.json
+
+nighwatch http request \
+  --config engagements/authorized-active.json \
+  --url https://authorized.example.com/api/test-fixtures/echo \
+  --method POST \
+  --body-file /tmp/nighwatch-test-body.json \
+  --approval-id approval-ticket-123 \
+  --capture-body
+```
+
+The configured active policy must be enabled, the origin must allow `POST`,
+and the approval identifier must be supplied to the gateway process. A
+successful response is only an observation; it does not create a finding.
+
+### Run a bounded active probe
+
+`active probe` substitutes one payload at a time into an operator-owned body
+template. It enforces `active_testing.max_cases` and
+`active_testing.max_payload_bytes`, records an evidence item for each case,
+and deliberately returns probe observations rather than vulnerability claims.
+
+```bash
+cat > /tmp/nighwatch-body-template.json <<'EOF'
+{"name":"{{NIGHWATCH_PAYLOAD}}"}
+EOF
+
+printf '%s\n' alpha canary '<marker>' > /tmp/nighwatch-payloads.txt
+
+nighwatch active probe \
+  --config engagements/authorized-active.json \
+  --url https://authorized.example.com/api/test-fixtures/echo \
+  --method POST \
+  --body-template-file /tmp/nighwatch-body-template.json \
+  --payload-file /tmp/nighwatch-payloads.txt \
+  --approval-id approval-ticket-123
 ```
 
 Cookie-based profiles use `NIGHWATCH_AUTH_OWNER_USER_COOKIE`. The profile name must already exist in `auth_profiles`. Secrets are redacted from receipts and evidence; response bodies are hashed and only a bounded redacted preview is stored when `--capture-body` is selected.
@@ -356,12 +443,43 @@ nighwatch tools plan \
   --target https://authorized.example.com/
 ```
 
-The plan command performs no network activity. Direct execution of these
-network tools remains disabled until each adapter can enforce per-request
-egress checks, redirect handling, rate limits, a kill switch, and evidence
-capture. The CLI accepts no arbitrary extra tool arguments. This prevents an
-LLM or operator typo from turning a low-volume observation into an uncontrolled
-scan.
+The plan command performs no network activity. A tool can run only through the
+loopback request-aware proxy, with fixed arguments and no arbitrary extra
+flags. The proxy delegates every HTTP request to the same scope, approval,
+rate, kill-switch, DNS, and evidence path used by `nighwatch http request`.
+HTTPS `CONNECT` is intentionally rejected because a blind tunnel would hide
+the request path and payload from the policy layer.
+
+Start the proxy in a separate terminal. An optional declared profile supplies
+credentials from the environment to every proxied request; the credentials do
+not appear in the tool command:
+
+```bash
+export NIGHWATCH_AUTH_OWNER_USER_BEARER='token-loaded-outside-the-repository'
+
+nighwatch proxy start \
+  --config engagements/authorized-active-http.json \
+  --auth-profile owner_user \
+  --evidence-dir evidence/eng_acme_2026_001
+```
+
+Copy the printed loopback URL and execute one of the fixed adapters:
+
+```bash
+nighwatch tools run \
+  --config engagements/authorized-active-http.json \
+  --tool httpx \
+  --target http://authorized.example.com/ \
+  --proxy-url http://127.0.0.1:PORT
+```
+
+Only the registered tool flags are used. `subfinder` remains planning-only
+because passive discovery cannot be constrained by the HTTP egress proxy;
+`ffuf` is state-change classified and requires active policy plus an explicit
+approval. For `ffuf`, provide the same approval identifier when starting the
+proxy (so proxied requests inherit it) and when invoking `tools run` (so the
+tool action itself is approved). Tool output is an observation and never a
+final finding.
 
 ## Run a bounded multi-step reasoning loop
 
@@ -446,11 +564,13 @@ Completed in the current MVP:
 2. bounded reasoning loop with persisted state;
 3. independent IDOR/BOLA and API authorization validator;
 4. controlled browser observation adapter; and
-5. fixed-argument tool registry and non-executing tool plans.
+5. fixed-argument tool registry;
+6. policy-gated active HTTP methods and bounded payload probes; and
+7. a loopback request-aware proxy for selected HTTP tools.
 
 Next, in order:
 
-1. a local egress proxy so deterministic tools can be executed request by request;
+1. a reviewed TLS interception adapter for HTTPS tool traffic;
 2. authenticated session setup workflows that require explicit human approval;
 3. GraphQL and API-specific observation parsers;
 4. independent validators for SSRF, XSS, race conditions, and business logic;
@@ -463,7 +583,15 @@ Traditional tools should provide observations, not final authority. Scanner outp
 
 Use Nighwatch only against assets for which you have explicit authorization. Read [`SECURITY.md`](SECURITY.md) before adding an execution adapter.
 
-Do not bypass the dry-run block, weaken the scope, expose Ollama remotely, or connect a browser, proxy, scanner, or shell directly to the model. The system needs an egress guard, kill switch, approval flow, complete request logging, and an evidence store before real execution is enabled.
+Do not weaken the scope, expose Ollama remotely, or connect a browser, proxy,
+scanner, or shell directly to the model. Keep the kill switch available:
+
+```bash
+export NIGHWATCH_KILL_SWITCH=1
+```
+
+or create the configured `.nighwatch-kill` file. Every active adapter checks
+the switch before execution and while waiting for a concurrency slot.
 
 ## Troubleshooting
 
@@ -516,5 +644,5 @@ vendor/              reviewed third-party source snapshots
 
 Nighwatch is in early development. Review the source, the program rules, and
 every adapter before using it in a real engagement. The current version is a
-scope-enforced read-only testing assistant, not an autonomous production
-pentesting system.
+scope-enforced controlled-active testing assistant, not an autonomous
+production pentesting system.
