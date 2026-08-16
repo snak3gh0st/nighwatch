@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from socketserver import TCPServer
 from threading import Thread
@@ -9,7 +10,7 @@ import pytest
 
 from agentsec.evidence import EvidenceStore
 from agentsec.gateway import GatewayBlocked, ToolGateway
-from agentsec.http_executor import HttpExecutor, HttpExecutorError
+from agentsec.http_executor import HttpExecutor, HttpExecutorError, _PinnedHTTPSConnection
 from agentsec.mapping import ApplicationMapStore
 from agentsec.models import EngagementConfig
 from agentsec.security import ReceiptLogger
@@ -147,3 +148,30 @@ def test_http_executor_denies_private_resolution_by_default(tmp_path, test_serve
 
     assert test_server.seen == []
     assert "private" in (evidence_dir / "evidence.jsonl").read_text(encoding="utf-8")
+
+
+def test_pinned_https_connection_uses_explicit_server_hostname(monkeypatch) -> None:
+    class _FakeSocket:
+        def settimeout(self, _timeout: float) -> None:
+            return
+
+        def connect(self, _sockaddr: tuple) -> None:
+            return
+
+        def close(self) -> None:
+            return
+
+    class _FakeContext:
+        def __init__(self) -> None:
+            self.server_hostname = None
+
+        def wrap_socket(self, sock, *, server_hostname: str):
+            self.server_hostname = server_hostname
+            return sock
+
+    context = _FakeContext()
+    monkeypatch.setattr(socket, "socket", lambda *_args, **_kwargs: _FakeSocket())
+    connection = _PinnedHTTPSConnection("bterminal.io", 443, socket.AF_INET, ("127.0.0.1", 443), 1.0)
+    connection._context = context
+    connection.connect()
+    assert context.server_hostname == "bterminal.io"

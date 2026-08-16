@@ -152,6 +152,7 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     def __init__(self, host: str, port: int, family: int, sockaddr: tuple, timeout: float) -> None:
         super().__init__(host, port, timeout=timeout)
+        self._nighwatch_server_hostname = host
         self._nighwatch_family = family
         self._nighwatch_sockaddr = sockaddr
 
@@ -160,7 +161,7 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         sock.settimeout(self.timeout)
         try:
             sock.connect(self._nighwatch_sockaddr)
-            self.sock = self._context.wrap_socket(sock, server_hostname=self._host)
+            self.sock = self._context.wrap_socket(sock, server_hostname=self._nighwatch_server_hostname)
         except BaseException:
             sock.close()
             raise
