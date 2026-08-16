@@ -26,9 +26,13 @@ The current slice implements the secure control-plane foundation:
 - redaction of sensitive headers and parameters;
 - a local Ollama client with structured JSON output;
 - a Planner that proposes one bounded next task; and
-- a dry-run Tool Gateway.
+- a dry-run Tool Gateway;
+- a bounded GET/HEAD HTTP executor;
+- an append-only Evidence Store; and
+- a structured Application Map; and
+- one bounded observe-reason-test-verify cycle for authorization hypotheses.
 
-Real HTTP, browser, shell, scanner, and proxy execution is intentionally disabled in this first slice. The first milestone validates authorization and reasoning contracts before adding components that generate traffic or change state.
+Browser, shell, scanner, and proxy execution remain disabled. The first executable slice performs only explicitly scoped GET/HEAD observations and records enough evidence to support the next reasoning step.
 
 ## What Nighwatch is meant to do
 
@@ -225,7 +229,7 @@ The URL check returns exit code `0` when allowed and `2` when rejected. The poli
 
 ## Inspect a safe plan
 
-The current run command does not send a request. It only shows what the gateway would evaluate:
+The general orchestration command does not send a request. It only shows what the gateway would evaluate:
 
 ```bash
 nighwatch run \
@@ -233,10 +237,92 @@ nighwatch run \
   --dry-run
 ```
 
-Without `--dry-run`, execution remains blocked:
+Without `--dry-run`, the general orchestration remains blocked:
 
 ```text
-execution blocked: the HTTP/browser/shell Tool Gateway is not enabled yet
+execution blocked: the general orchestrator is not enabled yet; use http request for the bounded HTTP slice
+```
+
+## Run one bounded HTTP observation
+
+The first execution slice supports only `GET` and `HEAD`. Every request passes through the declared scope, read-only action policy, rate limiter, budget, DNS address check, receipt logger, and evidence store.
+
+For a profile that needs a bearer token, load the secret into the process environment instead of writing it to the engagement file or shell arguments:
+
+```bash
+export NIGHWATCH_AUTH_OWNER_USER_BEARER='token-loaded-outside-the-repository'
+
+nighwatch http request \
+  --config engagements/example.json \
+  --url https://authorized.example.com/api/orders/123 \
+  --method GET \
+  --profile owner_user \
+  --capture-body
+```
+
+Cookie-based profiles use `NIGHWATCH_AUTH_OWNER_USER_COOKIE`. The profile name must already exist in `auth_profiles`. Secrets are redacted from receipts and evidence; response bodies are hashed and only a bounded redacted preview is stored when `--capture-body` is selected.
+
+Each execution writes local-only artifacts under `evidence/<engagement_id>/` by default:
+
+```text
+receipts.jsonl       authorization and rate decisions
+evidence.jsonl       redacted HTTP evidence and body hashes
+application_map.json endpoints, paths, parameters, roles, and observations
+```
+
+Private or loopback addresses are rejected by default, even when the hostname is in scope. An explicitly authorized local lab may opt in with:
+
+```json
+"network": {
+  "allow_private_addresses": true
+}
+```
+
+Do not enable this option for a public bug bounty target unless the program explicitly authorizes the private network path.
+
+## Compare two authorized profiles
+
+For an object-level authorization hypothesis, compare the same endpoint with two declared profiles. The validator performs four read-only requests: owner baseline, subject comparison, and one independent reproduction for each profile.
+
+```bash
+export NIGHWATCH_AUTH_OWNER_USER_BEARER='owner-token'
+export NIGHWATCH_AUTH_NON_OWNER_USER_BEARER='non-owner-token'
+
+nighwatch authz compare \
+  --config engagements/example.json \
+  --url https://authorized.example.com/api/orders/123 \
+  --owner-profile owner_user \
+  --subject-profile non_owner_user \
+  --impact-field email
+```
+
+The validator requires distinct credential fingerprints, successful responses, a matching object identifier, stable independent reproductions, and an observed impact field before producing a verified report. Results are:
+
+- `verified`: a report is written under `evidence/<engagement_id>/reports/`;
+- `candidate`: more human evidence or impact proof is required; or
+- `rejected`: the comparison did not satisfy the verification gates.
+
+An HTTP `200` by itself is never enough to create a report.
+
+## Run one reasoning cycle
+
+`investigate` connects the local planner to the bounded validator. The model receives only the observation and proposes one task. The URL and profile identities are supplied by the operator and remain outside the model's authority.
+
+```bash
+nighwatch investigate \
+  --config engagements/example.json \
+  --observation examples/observations/order-api.txt \
+  --url https://authorized.example.com/api/orders/123 \
+  --owner-profile owner_user \
+  --subject-profile non_owner_user \
+  --impact-field email \
+  --model qwen2.5-coder:14b
+```
+
+The current loop intentionally executes only `compare_authorization` and `validate_candidate` proposals. Other proposals are returned as `planned` without network activity. This keeps the first adaptive loop narrow while preserving the same sequence for future agents:
+
+```text
+Observe -> Reason -> Policy check -> Execute -> Evidence -> Verify
 ```
 
 ## Use the Planner with Ollama
@@ -282,14 +368,13 @@ Only the final state is reportable. Evidence should include the relevant request
 
 ## Recommended implementation order
 
-1. append-only Evidence Store with content hashes and receipts;
-2. read-only HTTP adapter with egress pinning and deterministic rate limits;
-3. controlled browser adapter for approved workflows;
-4. application mapping and authenticated profile comparison;
+1. authenticated profile comparison with two or more sessions;
+2. bounded reasoning loop: observe, reason, hypothesize, test, and observe again;
+3. independent IDOR/BOLA and API authorization validator;
+4. controlled browser adapter for approved workflows;
 5. adapters for deterministic reconnaissance and fuzzing tools behind the gateway;
-6. independent finding validators and rejection states;
-7. report generation in Markdown, JSON, SARIF, and PDF; and
-8. explicit approval flows for state-changing tests.
+6. independent finding rejection states; and
+7. report generation in Markdown, JSON, SARIF, and PDF.
 
 Traditional tools should provide observations, not final authority. Scanner output must never become a finding without verification and reproducible evidence.
 
