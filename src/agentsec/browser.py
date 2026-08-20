@@ -63,7 +63,8 @@ class BrowserObservation:
 
 
 def _safe_error(exc: BaseException) -> str:
-    return f"{type(exc).__name__}: {re.sub(r'[\\r\\n]+', ' ', str(exc))[:300]}"
+    cleaned = re.sub(r"[\\r\\n]+", " ", str(exc))
+    return f"{type(exc).__name__}: {cleaned[:300]}"
 
 
 def _cookie_metadata(cookie: Mapping[str, Any]) -> dict[str, Any]:
